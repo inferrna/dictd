@@ -1,9 +1,8 @@
 //Inspired by https://gist.github.com/gkbrk/bea6dee7c0478395b718
 //and tokio chat.rs example
-
+//extern crate sqlite_zstd;
 
 mod dictionary;
-
 use std::thread;
 use std::net::SocketAddr;
 use tokio::{
