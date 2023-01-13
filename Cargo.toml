@@ -10,7 +10,13 @@ tokio = { version = "^1", features = ["rt-multi-thread", "net", "macros", "io-ut
 tokio-util = { version = "*", features=["codec"] }
 tokio-stream = { version = "*" }
 futures = { version = "^0.3" }
+regex = "1.7.1"
+
 strum = "0.24"
 strum_macros = "0.24"
 
-sqlite-zstd = "0.3.2"
+sqlite-zstd = {path = "../OtherAlien/sqlite-zstd" }
+#rusqlite = "0.24.2"
+#sqlite-zstd = {git = "https://github.com/inferrna/sqlite-zstd" }
+
+async-trait = "0.1.61"
