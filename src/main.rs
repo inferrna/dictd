@@ -18,6 +18,7 @@ use tokio_util::codec::{Framed, LinesCodec, LinesCodecError};
 use tokio_stream::StreamExt;
 use futures::SinkExt;
 use std::str::FromStr;
+use rayon::prelude::IntoParallelIterator;
 use strum_macros::EnumString;
 
 #[derive(EnumString)]
@@ -116,6 +117,13 @@ async fn handle_client(mut stream: TcpStream) -> Result<(), LinesCodecError> {
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
     let listener = TcpListener::bind("0.0.0.0:2628").await.unwrap();
+    let path = "/media/Data/Data/Dicts/stardict-rus_eng_full-2.4.2/";
+    let dicts_fnames = vec!["rus_eng_full.dict", "eng_rus_full.dict"];
+
+    /*dicts_fnames.into_par_iter().map(|fnm| {
+
+    });*/
+
     loop {
         match listener.accept().await {
             Ok((stream, socket)) => {
