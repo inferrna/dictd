@@ -6,9 +6,11 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-tokio = { version = "^1", features = ["rt-multi-thread", "net", "macros", "io-util", "fs"]}
+tokio = { version = "^1", features = ["rt-multi-thread", "net", "macros", "io-util", "fs", "sync"]}
 tokio-util = { version = "*", features=["codec"] }
 tokio-stream = { version = "*" }
+tokio-rayon = "2.1.0"
+futures-util = "0.3.25"
 futures = { version = "^0.3" }
 regex = "1.7.1"
 rayon = "1.6.1"
@@ -16,6 +18,7 @@ strum = "0.24"
 strum_macros = "0.24"
 egzreader = "2.0.4"
 sqlite-zstd = {path = "../OtherAlien/sqlite-zstd" }
+async-compression = { version = "0.3.15", features = ["futures-io", "gzip", "tokio"] }
 #rusqlite = "0.24.2"
 #sqlite-zstd = {git = "https://github.com/inferrna/sqlite-zstd" }
 
