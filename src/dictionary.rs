@@ -1,25 +1,19 @@
-use std::io::{Read};
+use std::fs::File;
+use std::io::{BufRead, BufReader, Read};
 use std::path::MAIN_SEPARATOR;
-use std::pin::Pin;
-use std::rc::Rc;
-use std::sync::Arc;
-use tokio::sync::{Mutex, RwLock};
-use std::task::{Context, Poll};
-use tokio::fs::File;
-use tokio::io;
-use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader, ReadBuf};
-use async_trait::async_trait;
+use std::sync::{Mutex};
 use egzreader::EgzReader;
 use regex::Regex;
 use sqlite_zstd::rusqlite;
 
 pub struct Dictionary {
     name: String,
+    long_name: String,
     conn: Mutex<rusqlite::Connection>,
 }
 
 impl Dictionary {
-    fn new_empty(name: String) -> Self {
+    fn new_empty(name: String, long_name: String) -> Self {
         let conn =  rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "PRAGMA journal_mode = OFF;
@@ -30,7 +24,8 @@ impl Dictionary {
         ).expect("PRAGMA failed");
         sqlite_zstd::load(&conn).unwrap();
         Self {
-            name: name,
+            name,
+            long_name,
             conn: Mutex::new(conn)
         }
     }
@@ -44,7 +39,10 @@ impl Dictionary {
             .next().ok().flatten()?
             .get(0).ok()
     }
-    fn get_word_matches(&self, word: &str, strategy: MatchStrategy) -> Option<Vec<String>> {
+    pub(crate) fn get_both_names(&self) -> String {
+        format!("{} \"{}\"", self.name(), self.long_name())
+    }
+    pub(crate) fn get_word_matches(&self, word: &str, strategy: MatchStrategy) -> Option<Vec<String>> {
         let conn = self.conn.try_lock()
             .expect("Lock prepare");
 
@@ -95,33 +93,33 @@ impl Dictionary {
     pub fn name(&self) -> &str {
         &self.name
     }
+    pub fn long_name(&self) -> &str {
+        &self.long_name
+    }
 }
 
-#[async_trait(?Send)]
 pub trait DictLoader {
-    async fn from_dict_file(path: String) -> Self;
-    async fn load_from_reader<T: AsyncRead + Unpin>(&mut self, reader: io::BufReader<T>);
+    fn from_dict_file(path: String, long_name: String) -> Self;
+    fn load_from_reader<T: Read>(&mut self, reader: BufReader<T>);
 }
 
-async fn load_dict_uncompressed(name: String, filepath: &str) -> Dictionary {
-    let mut dict_file = File::open(filepath).await.unwrap();
+fn load_dict_uncompressed(name: String, long_name: String, filepath: &str) -> Dictionary {
+    let mut dict_file = File::open(filepath).unwrap();
     let mut reader = BufReader::new(dict_file);
 
-    let mut dictionary = Dictionary::new_empty(name);
-    dictionary.load_from_reader(reader).await;
+    let mut dictionary = Dictionary::new_empty(name, long_name);
+    dictionary.load_from_reader(reader);
     dictionary
 }
-async fn load_dict_compressed(name: String, filepath: &str) -> Dictionary {
-    let egzr = EgzReader::new(std::fs::File::open(filepath).unwrap());
-    let afr = AsyncFileReader { egzr };
-    let mut dictionary = Dictionary::new_empty(name);
-    dictionary.load_from_reader(BufReader::new(afr)).await;
+fn load_dict_compressed(name: String, long_name: String, filepath: &str) -> Dictionary {
+    let egzr = EgzReader::new(File::open(filepath).unwrap());
+    let mut dictionary = Dictionary::new_empty(name, long_name);
+    dictionary.load_from_reader(BufReader::new(egzr));
     dictionary
 }
 
-#[async_trait(?Send)]
 impl DictLoader for Dictionary {
-    async fn from_dict_file(path: String) -> Self {
+    fn from_dict_file(path: String, long_name: String) -> Self {
         let name = path.split(MAIN_SEPARATOR)
             .last()
             .unwrap()
@@ -131,12 +129,12 @@ impl DictLoader for Dictionary {
             .to_string();
         let is_compressed = path.ends_with("z");
         match is_compressed {
-            true => load_dict_compressed(name, &path).await,
-            false => load_dict_uncompressed(name, &path).await
+            true => load_dict_compressed(name, long_name, &path),
+            false => load_dict_uncompressed(name, long_name, &path)
         }
     }
 
-    async fn load_from_reader<T: AsyncRead + Unpin>(&mut self, reader: io::BufReader<T>) {
+    fn load_from_reader<T: Read>(&mut self, reader: BufReader<T>) {
         let re = Regex::new(r"<k>(&.+?;)?(?P<word>.+?)</k>").unwrap();
         let mut lines = reader.lines();
         let mut last_text = "".to_string();
@@ -150,7 +148,7 @@ impl DictLoader for Dictionary {
 
         self.create_dictionary();
         let mut cnt = 0;
-        while let Ok(Some(line)) = lines.next_line().await {
+        while let Some(Ok(line)) = lines.next() {
             //eprintln!("Processing line {}", &line);
             let mut prev_end = 0;
             for m in re.find_iter(&line) {
@@ -160,7 +158,7 @@ impl DictLoader for Dictionary {
                     defs_reday2push.push((word, txt2push));
                     cnt += 1;
                 }
-                if defs_reday2push.len()>128 {
+                if defs_reday2push.len()>1280 {
                     (defs_reday2push, defs2send) = (vec![], defs_reday2push);
                     self.push_words(defs2send);
                 }
@@ -174,55 +172,24 @@ impl DictLoader for Dictionary {
     }
 }
 
-struct AsyncFileReader {
-    egzr: EgzReader<std::fs::File>
-}
-
-impl AsyncRead for AsyncFileReader {
-    fn poll_read(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<std::io::Result<()>> {
-        let cap = buf.capacity();
-        let mut bytes_done= cap;
-        let mut byteskeeper = vec![0u8; cap];
-        while bytes_done==cap && buf.remaining()>0 {
-            //bytes_done = self.egzr.read(buf.initialize_unfilled()).unwrap();
-            bytes_done = self.egzr.read(&mut byteskeeper).unwrap();
-            byteskeeper[bytes_done..].fill(0);
-            buf.put_slice(&byteskeeper[0..bytes_done]);
-            //eprintln!("Read {bytes_done} bytes");
-        }
-        Poll::Ready(Ok(()))
-    }
-}
-
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_read_dict() {
+#[test]
+fn test_read_dict() {
     let path = "/media/Data/Data/Dicts/stardict-eng_rus_full-2.4.2/eng_rus_full.dict".to_string();
-    Dictionary::from_dict_file(path).await;
+    Dictionary::from_dict_file(path);
 }
-#[tokio::test(flavor = "multi_thread")]
-async fn test_read_dict_compressed() {
+#[test]
+fn test_read_dict_compressed() {
     let path = "/media/Data/Data/Dicts/stardict-eng_rus_full-2.4.2/eng_rus_full.dict.gz".to_string();
-    Dictionary::from_dict_file(path).await;
+    Dictionary::from_dict_file(path);
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn test_read_compressed_egz() {
+#[test]
+fn test_read_compressed_egz() {
     let path = "/media/Data/Data/Dicts/stardict-rus_eng_full-2.4.2/rus_eng_full.dict.gz";
     let egzr = EgzReader::new(std::fs::File::open(path).unwrap());
-    let afr = AsyncFileReader { egzr };
-    let mut dictionary = Dictionary::new_empty("rus_eng_full".to_string());
-    dictionary.load_from_reader(BufReader::new(afr)).await;
+    let mut dictionary = Dictionary::new_empty("rus_eng_full".to_string(), "".to_uppercase());
+    dictionary.load_from_reader(BufReader::new(egzr));
 }
 
-use async_compression::tokio::bufread::GzipDecoder;
 use sqlite_zstd::rusqlite::{Rows, Statement};
 use crate::MatchStrategy;
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_read_compressed_asc() {
-    let path = "/media/Data/Data/Dicts/stardict-rus_eng_full-2.4.2/rus_eng_full.dict.gz";
-    let gzr = GzipDecoder::new(BufReader::new(File::open(path).await.unwrap()));
-    let mut dictionary = Dictionary::new_empty("rus_eng_full".to_string());
-    dictionary.load_from_reader(BufReader::new(gzr)).await;
-}
