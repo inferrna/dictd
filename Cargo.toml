@@ -13,6 +13,8 @@ futures = { version = "^0.3" }
 regex = "1.7.1"
 rayon = "1.6.1"
 strum = "0.24"
+serde = "^1"
+toml = "^0.6"
 strum_macros = "0.24"
 egzreader = "2.0.4"
 sqlite-zstd = {path = "../OtherAlien/sqlite-zstd" }

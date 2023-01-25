@@ -3,15 +3,19 @@
 //extern crate sqlite_zstd;
 
 mod dictionary;
+mod config;
 
 use std::collections::HashMap;
+use std::env;
+use std::io::Read;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::{net::{
     TcpListener,
     TcpStream
 }, io::BufReader, fs::File};
-use tokio::io::{AsyncBufReadExt};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt};
 use tokio_util::codec::{Framed, LinesCodec, LinesCodecError};
 use futures::SinkExt;
 use futures_util::StreamExt;
@@ -20,6 +24,8 @@ use rayon::{iter::IntoParallelIterator, iter::ParallelIterator};
 use rayon::iter::IntoParallelRefIterator;
 use strum::{EnumMessage, IntoEnumIterator, ParseError};
 use strum_macros::{EnumString, EnumIter, EnumMessage};
+use tokio::fs::read_to_string;
+use crate::config::Config;
 use crate::dictionary::{Dictionary, DictLoader};
 
 #[derive(EnumString)]
@@ -69,21 +75,6 @@ impl Unquote for &str {
     }
 }
 
-/*
-#[derive(EnumString)]
-enum Response {
-    #[strum(serialize = "550 Invalid database, use \"SHOW DB\" for list of databases")]
-    InvalidDB550,
-    #[strum(serialize = "551 Invalid strategy, use \"SHOW STRAT\" for a list of strategies")]
-    InvalidStrat551,
-    #[strum(serialize = "552 No match")]
-    NoMatch552,
-    #[strum(serialize = "152 N matches found")]
-    NMatchesFound152,
-    #[strum(serialize = "250 ok ")]
-    Ok250,
-}
-*/
 const HELLO_DICT_220: &str = "220 dict 0.1.0\r";
 const INVALID_DB_550: &str = "550 invalid database, use SHOW DB for list\r";
 const NO_MATCH_552: &str = "552 No match\r";
@@ -92,15 +83,15 @@ const ENDING_DOT: &str = ".\r";
 const UNKNOWN_STRAT_551: &str = "551 invalid strategy, use SHOW STRAT for a list\r";
 
 async fn handle_client(mut stream: TcpStream, dicts: Dictionaries) -> Result<(), LinesCodecError> {
-    //To debug use
-    //socat -v -dddd TCP-LISTEN:2628 TCP:dict.org:2628
+    //To debug networking switch port to 2627 and run
+    //while date; do socat -v -dddd TCP-LISTEN:2628,bind=127.0.0.1 TCP:127.0.0.1:2627; done
     let mut lines = Framed::new(stream, LinesCodec::new());
     lines.send(HELLO_DICT_220).await?;
     loop {
         if let Some(external_input) = lines.next().await {
             match external_input {
                 Ok(line) => {
-                    eprintln!("Client says: '{}'", &line);
+                    #[cfg(debug_assertions)] eprintln!("Client says: '{}'", &line);
                     let pieces: Vec<&str> = line.trim().split(' ').collect();
 
                     let command_string = pieces[0];
@@ -167,8 +158,9 @@ async fn handle_client(mut stream: TcpStream, dicts: Dictionaries) -> Result<(),
                                         //lines.send("250 ok").await?;
                                         lines.send(format!("152 {} mathes found\r", matches.len())).await?;
                                         for (dictionary, match_word) in matches.iter() {
-                                            lines.send(format!("151 \"{dictionary}\" \"{match_word}\"\n.\r")).await?;
+                                            lines.send(format!("{dictionary} \"{match_word}\"\r")).await?;
                                         }
+                                        lines.send(ENDING_DOT).await?;
                                         lines.send(BYE_DICT_250).await?;
                                     }
                                 }
@@ -187,7 +179,7 @@ async fn handle_client(mut stream: TcpStream, dicts: Dictionaries) -> Result<(),
                                     Ok(what2show) => {
                                         match what2show {
                                             ItemToShow::DATABASES => {
-                                                eprintln!("Gonna show");
+                                                #[cfg(debug_assertions)] eprintln!("Show");
                                                 let dblist = dicts.show_databases();
                                                 lines.send(format!("110 {} databases present\r", dblist.len())).await?;
                                                 for (db_name, db_long_name) in dblist.iter() {
@@ -221,18 +213,18 @@ async fn handle_client(mut stream: TcpStream, dicts: Dictionaries) -> Result<(),
                         },
                         Err(_) => {
                             let msg = format!("500 Unknown command '{}'\r", command_string);
-                            eprintln!("{}", &msg);
+                            #[cfg(debug_assertions)] eprintln!("{}", &msg);
                             lines.send(&msg).await?;
                             break;
                         }
                     }
                 }
                 Err(err) => {
-                    eprintln!("Error decoding line: '{:?}'", &err);
+                    #[cfg(debug_assertions)] eprintln!("Error decoding line: '{:?}'", &err);
                 }
             }
         } else{
-            println!("Client disconnected");
+            #[cfg(debug_assertions)] eprintln!("Client disconnected");
             break;
         }
     }
@@ -260,7 +252,7 @@ impl Dictionaries {
             self.dicts
                 .keys()
                 .filter(|&k| {
-                    eprintln!("Matching '{}' against '{}'", dict_name, k);
+                    #[cfg(debug_assertions)] eprintln!("Matching '{}' against '{}'", dict_name, k);
                     dict_name.eq(k)
                 })
                 .take(1)
@@ -300,7 +292,7 @@ impl Dictionaries {
         }
     }
     fn lookup_word(&self, word: String, dict_name: String) -> Result<Vec<(String, String)>, WordSearchError> {
-        eprintln!("Looking for '{}' in '{}'", &word, &dict_name);
+        #[cfg(debug_assertions)] eprintln!("Looking for '{}' in '{}'", &word, &dict_name);
         let dicts2lookup: Vec<String> = self.filter_dicts(dict_name);
         if dicts2lookup.len()==0 {
             return Err(WordSearchError::DbNotFoundErr)
@@ -326,16 +318,34 @@ impl Dictionaries {
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
-    let listener = TcpListener::bind("127.0.0.1:2628").await.unwrap();
-    let path_er = ("/media/Data/Data/Dicts/stardict-eng_rus_full-2.4.2/eng_rus_full.dict".to_string(), "English - Russian".to_string());
-    let path_re = ("/media/Data/Data/Dicts/stardict-rus_eng_full-2.4.2/rus_eng_full.dict.gz".to_string(), "Russian - English".to_string());
-    let dicts_fnames = vec![path_er, path_re];
+
+    let config_path_string: String = env::args().skip(1).last().expect("Provide path to config file as a parameter please.");
+
+    dbg!(&config_path_string);
+
+    let config_path = Path::new(&config_path_string);
+    if !config_path.exists() {
+        eprintln!("File \"{}\" doesn't exists", &config_path_string);
+        std::process::exit(1);
+    }
+    let mut config_content = "".to_string();
+    File::open(config_path)
+        .await
+        .expect("Unable to open config file")
+        .read_to_string(&mut config_content)
+        .await
+        .expect("Unable to read config file");
+    let config: Config = toml::from_str(&config_content).expect("Wrong config file.");
+
+    let listener = TcpListener::bind(&format!("{}:{}", config.host(), config.port())).await.unwrap();
+
+
 
     let now_b4load = Instant::now();
 
-    let dictionaries: HashMap<String, Dictionary> = dicts_fnames.into_par_iter()
-        .map(|(fnm, long_nm)| {
-            let d = Dictionary::from_dict_file(fnm, long_nm);
+    let dictionaries: HashMap<String, Dictionary> = config.databases().par_iter()
+        .map(|dbc| {
+            let d = Dictionary::from_dict_file(dbc);
             let name = d.name().to_string();
             (name, d)
         })
@@ -350,7 +360,7 @@ async fn main() {
             Ok((stream, socket)) => {
                 let cloned_dicts = dictionaries.clone();
                 tokio::spawn(async move {
-                    eprintln!("New connection at '{}:{}'", &socket.ip(), &socket.port());
+                    #[cfg(debug_assertions)] eprintln!("New connection at '{}:{}'", &socket.ip(), &socket.port());
                     handle_client(stream, cloned_dicts).await.unwrap();
                 });
             }
