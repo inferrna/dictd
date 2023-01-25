@@ -7,8 +7,8 @@ use regex::Regex;
 use sqlite_zstd::rusqlite;
 
 pub struct Dictionary {
+    short_name: String,
     name: String,
-    long_name: String,
     conn: Mutex<rusqlite::Connection>,
 }
 
@@ -24,15 +24,15 @@ impl Dictionary {
         ).expect("PRAGMA failed");
         sqlite_zstd::load(&conn).unwrap();
         Self {
-            name,
-            long_name,
+            short_name: name,
+            name: long_name,
             conn: Mutex::new(conn)
         }
     }
     pub(crate) fn get_word_meaning(&self, word: &str) -> Option<String> {
         self.conn.try_lock()
             .expect("Lock prepare")
-            .prepare(&format!("SELECT meaning FROM {} WHERE WORD = '{word}' LIMIT 1", self.name))
+            .prepare(&format!("SELECT meaning FROM {} WHERE WORD = '{word}' LIMIT 1", self.short_name))
             .ok()?
             .query([])
             .ok()?
@@ -47,8 +47,8 @@ impl Dictionary {
             .expect("Lock prepare");
 
         let expression = match strategy {
-            MatchStrategy::EXACT => format!("SELECT word FROM {} WHERE word = '{word}' LIMIT 1", self.name),
-            MatchStrategy::PREFIX => format!("SELECT word FROM {} WHERE word LIKE '{word}%' LIMIT 1", self.name),
+            MatchStrategy::EXACT => format!("SELECT word FROM {} WHERE word = '{word}' LIMIT 1", self.short_name),
+            MatchStrategy::PREFIX => format!("SELECT word FROM {} WHERE word LIKE '{word}%' LIMIT 1", self.short_name),
         };
 
         let mut stmt = conn
@@ -71,35 +71,32 @@ impl Dictionary {
         self.conn.try_lock().expect("Lock execute_batch").execute_batch(&expression).unwrap()
     }
     fn create_dictionary(&mut self) {
-        self.execute(format!("CREATE TABLE {}(word TEXT, meaning TEXT)", &self.name));
-        self.execute(format!("CREATE INDEX IF NOT EXISTS wordix ON {}(word);", &self.name));
+        self.execute(format!("CREATE TABLE {}(word TEXT, meaning TEXT)", &self.short_name));
+        self.execute(format!("CREATE INDEX IF NOT EXISTS wordix ON {}(word);", &self.short_name));
     }
     fn push_word(&self, word: String, text: String) {
-        //eprintln!("Pushing word: '{}'", &word);
-        //eprintln!("With text: '{}'", &text);
-        self.execute(format!(r#"INSERT INTO {table_name} VALUES("{word}", "{text}")"#, table_name=&self.name));
+        self.execute(format!(r#"INSERT INTO {table_name} VALUES("{word}", "{text}")"#, table_name=&self.short_name));
     }
     fn push_words(&self, words_texts: Vec<(String, String)>) {
         let stmts: Vec<String> = words_texts.into_iter().map(|(word, text)|{
-            format!(r#"INSERT INTO {table_name} VALUES("{word}", "{text}");"#, table_name=&self.name)
+            format!(r#"INSERT INTO {table_name} VALUES("{word}", "{text}");"#, table_name=&self.short_name)
         }).collect();
         let stmts_raw = stmts.join("\n");
         let full_batch_stmt = format!(r#"BEGIN;
         {stmts_raw}
         COMMIT;"#);
-        //eprintln!("{}", full_batch_stmt);
         self.execute_batch(full_batch_stmt);
     }
     pub fn name(&self) -> &str {
-        &self.name
+        &self.short_name
     }
     pub fn long_name(&self) -> &str {
-        &self.long_name
+        &self.name
     }
 }
 
-pub trait DictLoader {
-    fn from_dict_file(path: String, long_name: String) -> Self;
+pub(crate) trait DictLoader {
+    fn from_dict_file(dbc: &DatabaseConfig) -> Self;
     fn load_from_reader<T: Read>(&mut self, reader: BufReader<T>);
 }
 
@@ -119,18 +116,11 @@ fn load_dict_compressed(name: String, long_name: String, filepath: &str) -> Dict
 }
 
 impl DictLoader for Dictionary {
-    fn from_dict_file(path: String, long_name: String) -> Self {
-        let name = path.split(MAIN_SEPARATOR)
-            .last()
-            .unwrap()
-            .split(".")
-            .next()
-            .unwrap()
-            .to_string();
-        let is_compressed = path.ends_with("z");
+    fn from_dict_file(dbc: &DatabaseConfig) -> Self {
+        let is_compressed = dbc.path().ends_with("z");
         match is_compressed {
-            true => load_dict_compressed(name, long_name, &path),
-            false => load_dict_uncompressed(name, long_name, &path)
+            true => load_dict_compressed(dbc.short_name(), dbc.name(), dbc.path()),
+            false => load_dict_uncompressed(dbc.short_name(), dbc.name(), dbc.path())
         }
     }
 
@@ -149,7 +139,6 @@ impl DictLoader for Dictionary {
         self.create_dictionary();
         let mut cnt = 0;
         while let Some(Ok(line)) = lines.next() {
-            //eprintln!("Processing line {}", &line);
             let mut prev_end = 0;
             for m in re.find_iter(&line) {
                 last_text = format!("{}{}", &last_text, &line[prev_end..m.start()]);
@@ -192,4 +181,5 @@ fn test_read_compressed_egz() {
 }
 
 use sqlite_zstd::rusqlite::{Rows, Statement};
+use crate::config::DatabaseConfig;
 use crate::MatchStrategy;
