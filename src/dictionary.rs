@@ -4,6 +4,7 @@ use std::io::{BufRead, BufReader, Read};
 use std::path::MAIN_SEPARATOR;
 use std::sync::{Mutex};
 use egzreader::EgzReader;
+use memory_stats::memory_stats;
 use regex::Regex;
 use sqlite_zstd::rusqlite;
 
@@ -111,10 +112,22 @@ impl Dictionary {
         self.query_stub::<bool>(format!(r#"SELECT zstd_enable_transparent('{{"table": "{}", "column": "word", "compression_level": 6, "dict_chooser": "''a''"}}');"#, &self.short_name));
     }
     fn compress_dictionary(&self) {
+        if let Some(usage) = memory_stats() {
+            println!("Current physical memory usage: {}", usage.physical_mem);
+            println!("Current virtual memory usage: {}", usage.virtual_mem);
+        } else {
+            println!("Couldn't get the current memory usage :(");
+        }
         self.execute_pragma("auto_vacuum", "full".to_string());
         self.execute_pragma("journal_mode", "WAL".to_string());
         self.query_stub::<bool>("SELECT zstd_incremental_maintenance(null, 1.0);".to_string());
         self.execute_pragma("VACUUM", "".to_string());
+        if let Some(usage) = memory_stats() {
+            println!("Current physical memory usage: {}", usage.physical_mem);
+            println!("Current virtual memory usage: {}", usage.virtual_mem);
+        } else {
+            println!("Couldn't get the current memory usage :(");
+        }
     }
     fn push_word(&self, word: String, text: String) {
         self.execute(format!(r#"INSERT INTO {table_name} VALUES("{word}", "{text}")"#, table_name=&self.short_name));
