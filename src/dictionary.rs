@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
 use std::path::MAIN_SEPARATOR;
@@ -14,12 +15,16 @@ pub struct Dictionary {
 
 impl Dictionary {
     fn new_empty(name: String, long_name: String) -> Self {
-        let conn =  rusqlite::Connection::open_in_memory().unwrap();
+        let mut conn: Connection = Connection::open_in_memory().unwrap();
         conn.execute_batch(
-            "PRAGMA journal_mode = OFF;
+            "PRAGMA journal_mode = WAL;
               PRAGMA synchronous = 0;
-              PRAGMA cache_size = 1000000;
+              PRAGMA cache_size = 10000;
+              PRAGMA busy_timeout=2000;
               PRAGMA locking_mode = EXCLUSIVE;
+              PRAGMA auto_vacuum = full;
+              pragma auto_vacuum=full;
+              pragma journal_mode = WAL;
               PRAGMA temp_store = MEMORY;",
         ).expect("PRAGMA failed");
         sqlite_zstd::load(&conn).unwrap();
@@ -64,22 +69,59 @@ impl Dictionary {
         }
         Some(res)
     }
+    pub(crate) fn query_stub<T: FromSql + Copy + Clone + Debug>(&self, expression: String) {
+        let conn = self.conn.try_lock()
+            .expect("Lock prepare");
+        let mut expr = conn.prepare(&expression)
+            .unwrap_or_else(|e| panic!("Failed to prepare '{expression}' got '{:?}'", e));
+        let mut res = expr
+            .query([])
+            .unwrap_or_else(|e| panic!("Failed to execute '{expression}' got '{:?}'", e));
+        #[cfg(debug_assertions)]
+        match res.next() {
+            Ok(v) => {
+                if let Some(r) = v.as_ref() {
+                    let r_opt: Option<T> = r.get(0).ok();
+                    if let Some(r) = r_opt {
+                        eprintln!("Got result '{:?}' for '{expression}'", r)
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Got error '{:?}' for '{expression}'", e)
+            }
+        }
+    }
     fn execute(&self, expression: String) -> usize {
-        self.conn.try_lock().expect("Lock execute").execute(&expression, []).unwrap()
+        self.conn.try_lock().expect("Lock execute").execute(&expression, [])
+            .unwrap_or_else(|e| panic!("Failed to execute '{expression}' got '{:?}'", e))
     }
     fn execute_batch(&self, expression: String) {
-        self.conn.try_lock().expect("Lock execute_batch").execute_batch(&expression).unwrap()
+        self.conn.try_lock().expect("Lock execute_batch").execute_batch(&expression)
+            .unwrap_or_else(|e| panic!("Failed to execute '{expression}' got '{:?}'", e))
     }
-    fn create_dictionary(&mut self) {
-        self.execute(format!("CREATE TABLE {}(word TEXT, meaning TEXT)", &self.short_name));
+    fn execute_pragma(&self, name: &str, value: String) {
+        self.conn.try_lock().expect("Lock execute_batch").pragma_update(None, name,&value)
+            .unwrap_or_else(|e| panic!("Failed to execute pragma {} = {} got '{:?}'", name, value, e))
+    }
+    fn create_dictionary(&self) {
+        self.execute(format!("CREATE TABLE {}(id INTEGER PRIMARY KEY AUTOINCREMENT, word TEXT, meaning TEXT)", &self.short_name));
         self.execute(format!("CREATE INDEX IF NOT EXISTS wordix ON {}(word);", &self.short_name));
+        self.query_stub::<bool>(format!(r#"SELECT zstd_enable_transparent('{{"table": "{}", "column": "meaning", "compression_level": 7, "dict_chooser": "''a''"}}');"#, &self.short_name));
+        self.query_stub::<bool>(format!(r#"SELECT zstd_enable_transparent('{{"table": "{}", "column": "word", "compression_level": 6, "dict_chooser": "''a''"}}');"#, &self.short_name));
+    }
+    fn compress_dictionary(&self) {
+        self.execute_pragma("auto_vacuum", "full".to_string());
+        self.execute_pragma("journal_mode", "WAL".to_string());
+        self.query_stub::<bool>("SELECT zstd_incremental_maintenance(null, 1.0);".to_string());
+        self.execute_pragma("VACUUM", "".to_string());
     }
     fn push_word(&self, word: String, text: String) {
         self.execute(format!(r#"INSERT INTO {table_name} VALUES("{word}", "{text}")"#, table_name=&self.short_name));
     }
     fn push_words(&self, words_texts: Vec<(String, String)>) {
         let stmts: Vec<String> = words_texts.into_iter().map(|(word, text)|{
-            format!(r#"INSERT INTO {table_name} VALUES("{word}", "{text}");"#, table_name=&self.short_name)
+            format!(r#"INSERT INTO {table_name}(word, meaning) VALUES("{word}", "{text}");"#, table_name=&self.short_name)
         }).collect();
         let stmts_raw = stmts.join("\n");
         let full_batch_stmt = format!(r#"BEGIN;
@@ -101,8 +143,8 @@ pub(crate) trait DictLoader {
 }
 
 fn load_dict_uncompressed(name: String, long_name: String, filepath: &str) -> Dictionary {
-    let mut dict_file = File::open(filepath).unwrap();
-    let mut reader = BufReader::new(dict_file);
+    let dict_file = File::open(filepath).unwrap();
+    let reader = BufReader::new(dict_file);
 
     let mut dictionary = Dictionary::new_empty(name, long_name);
     dictionary.load_from_reader(reader);
@@ -157,7 +199,8 @@ impl DictLoader for Dictionary {
             last_text = format!("{}{}", &last_text, &line[prev_end..]); //Add remains of line to current text
         }
         self.push_words(defs_reday2push);
-        eprintln!("Inserted {} definiions", cnt);
+        eprintln!("Inserted {} definitions", cnt);
+        self.compress_dictionary();
     }
 }
 
@@ -180,6 +223,7 @@ fn test_read_compressed_egz() {
     dictionary.load_from_reader(BufReader::new(egzr));
 }
 
-use sqlite_zstd::rusqlite::{Rows, Statement};
+use sqlite_zstd::rusqlite::{Connection, Rows, Statement};
+use sqlite_zstd::rusqlite::types::FromSql;
 use crate::config::DatabaseConfig;
 use crate::MatchStrategy;

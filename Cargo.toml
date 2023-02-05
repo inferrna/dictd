@@ -27,6 +27,10 @@ opt-level = 3
 inherits = "release"
 opt-level = 1
 
+[profile.fastdev]
+inherits = "dev"
+opt-level = 1
+
 [profile.production]
 inherits = "release"
 lto = "fat"

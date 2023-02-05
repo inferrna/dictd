@@ -105,6 +105,7 @@ async fn handle_client(mut stream: TcpStream, dicts: Dictionaries) -> Result<(),
                                 let maybe_definitions = dicts.lookup_word(word.clone(), dict_name);
                                 match maybe_definitions {
                                     Err(e) => {
+                                        #[cfg(debug_assertions)] eprintln!("Result is: '{:?}'", &e);
                                         match e {
                                             WordSearchError::DbNotFoundErr => {
                                                 lines.send(INVALID_DB_550).await?;
@@ -267,7 +268,7 @@ impl Dictionaries {
     }
     fn match_word(&self, word: String, dict_name: String, strategy: MatchStrategy) -> Result<Vec<(String, String)>, WordSearchError> {
         let dicts2lookup: Vec<String> = self.filter_dicts(dict_name);
-        if dicts2lookup.len()==0 {
+        if dicts2lookup.is_empty() {
             return Err(WordSearchError::DbNotFoundErr)
         }
         let res: Vec<Option<Vec<(String, String)>>> = dicts2lookup.par_iter()
@@ -285,16 +286,16 @@ impl Dictionaries {
             .filter_map(|v| v)
             .flatten()
             .collect();
-        if res.len() > 0 {
+        if !res.is_empty() {
             Ok(res)
         } else {
-            return Err(WordSearchError::WordNotFoundErr)
+            Err(WordSearchError::WordNotFoundErr)
         }
     }
     fn lookup_word(&self, word: String, dict_name: String) -> Result<Vec<(String, String)>, WordSearchError> {
         #[cfg(debug_assertions)] eprintln!("Looking for '{}' in '{}'", &word, &dict_name);
         let dicts2lookup: Vec<String> = self.filter_dicts(dict_name);
-        if dicts2lookup.len()==0 {
+        if dicts2lookup.is_empty() {
             return Err(WordSearchError::DbNotFoundErr)
         }
         let res: Vec<Option<(String, String)>> = dicts2lookup.into_par_iter()
@@ -308,10 +309,10 @@ impl Dictionaries {
         let res: Vec<(String, String)> = res.into_iter()
             .flatten()
             .collect();
-        if res.len() > 0 {
+        if !res.is_empty() {
             Ok(res)
         } else {
-            return Err(WordSearchError::WordNotFoundErr)
+            Err(WordSearchError::WordNotFoundErr)
         }
     }
 }
