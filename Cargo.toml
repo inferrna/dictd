@@ -17,8 +17,9 @@ serde = "^1"
 toml = "^0.6"
 strum_macros = "0.24"
 egzreader = "2.0.4"
-sqlite-zstd = {path = "../OtherAlien/sqlite-zstd" }
+zstd-map = {path = "../BitsSex/zstd-map" }
 newline-converter = "0.2.2"
+memory-stats = "1.1.0"
 
 [profile.release]
 opt-level = 3
