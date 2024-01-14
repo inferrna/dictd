@@ -31,7 +31,17 @@ impl Dictionary {
         format!("{} \"{}\"", self.name(), self.long_name())
     }
     pub(crate) fn get_word_matches(&self, word: &str, strategy: MatchStrategy) -> Option<Vec<String>> {
-        None
+        match strategy {
+            MatchStrategy::EXACT => Some(vec![self.get_word_meaning(word)?]),
+            MatchStrategy::PREFIX => {
+                let res = (1..word.len())
+                    .rev()
+                    .filter_map(|x| self.get_word_meaning(&word[0..x]))
+                    .take(1)
+                    .last()?;
+                Some(vec![res])
+            }
+        }
     }
     pub(crate) fn compress_dictionary(&mut self) {
         self.map.try_lock()
@@ -114,7 +124,7 @@ impl DictLoader for Dictionary {
                 prev_end = m.end();
                 last_word = Some(re.replace(&line[m.start()..m.end()], "${word}").to_string());
             }
-            last_text = format!("{}{}", &last_text, &line[prev_end..]); //Add remains of line to current text
+            last_text = format!("{}\n{}", &last_text, &line[prev_end..]); //Add remains of line to current text
         }
         self.push_words(defs_ready2push);
         eprintln!("Inserted {} definitions", cnt);

@@ -80,7 +80,7 @@ const INVALID_DB_550: &str = "550 invalid database, use SHOW DB for list\r";
 const NO_MATCH_552: &str = "552 No match\r";
 const BYE_DICT_250: &str = "250 ok\r";
 const ENDING_DOT: &str = ".\r";
-const UNKNOWN_STRAT_551: &str = "551 invalid strategy, use SHOW STRAT for a list\r";
+const UNKNOWN_STRAT_551: &str = "551 invalid strategy, use SHOW STRAT for list\r";
 
 async fn handle_client(mut stream: TcpStream, dicts: Dictionaries) -> Result<(), LinesCodecError> {
     //To debug networking switch port to 2627 and run
@@ -120,6 +120,7 @@ async fn handle_client(mut stream: TcpStream, dicts: Dictionaries) -> Result<(),
                                         //lines.send("250 ok").await?;
                                         lines.send(format!("150 {} definitions retrieved\r", definitions.len())).await?;
                                         for (dictionary, definition) in definitions.iter() {
+                                            #[cfg(debug_assertions)] eprintln!("Definition from {dictionary} is: '{definition}'");
                                             lines.send(format!("151 \"{word}\" {dictionary}\r")).await?;
                                             let definition = unix2dos(definition);
                                             lines.send(format!("{definition}\r")).await?;
@@ -249,7 +250,7 @@ impl Dictionaries {
         self.dicts.values().map(|d|(d.name().to_string(), d.long_name().to_string())).collect()
     }
     fn filter_dicts(&self, dict_name: String) -> Vec<String> {
-        if !["*", "all"].contains(&dict_name.as_str()) {
+        if !["*", "all", "!"].contains(&dict_name.as_str()) {
             self.dicts
                 .keys()
                 .filter(|&k| {
