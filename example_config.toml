@@ -1,0 +1,11 @@
+[server]
+host = "[::]"
+port = 2628
+
+[[databases]]
+path = "./some_uncompressed.dict"
+name = "Oxford dictionary"
+
+[[databases]]
+path = "./some_compressed.dict.gz"
+name = "Vietnamese - English"
