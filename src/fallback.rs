@@ -8,7 +8,6 @@ use tokio_util::codec::{Framed, LinesCodec, LinesCodecError};
 custom_error! {pub FallbackError
     IOError{source: io::Error } = "IO error",
     LinesError{source: LinesCodecError } = "Lines error",
-
 }
 
 #[inline]
