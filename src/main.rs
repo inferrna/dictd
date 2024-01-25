@@ -4,6 +4,7 @@
 
 mod dictionary;
 mod config;
+mod fallback;
 
 use std::collections::HashMap;
 use std::env;
@@ -22,11 +23,13 @@ use futures_util::StreamExt;
 use newline_converter::unix2dos;
 use rayon::{iter::IntoParallelIterator, iter::ParallelIterator};
 use rayon::iter::IntoParallelRefIterator;
+use regex::Regex;
 use strum::{EnumMessage, IntoEnumIterator, ParseError};
 use strum_macros::{EnumString, EnumIter, EnumMessage};
 use tokio::fs::read_to_string;
 use crate::config::Config;
 use crate::dictionary::{Dictionary, DictLoader};
+use crate::fallback::FallbackError;
 
 #[derive(EnumString)]
 enum Command {
@@ -85,8 +88,10 @@ const UNKNOWN_STRAT_551: &str = "551 invalid strategy, use SHOW STRAT for list\r
 async fn handle_client(mut stream: TcpStream, dicts: Dictionaries) -> Result<(), LinesCodecError> {
     //To debug networking switch port to 2627 and run
     //while date; do socat -v -dddd TCP-LISTEN:2628,bind=127.0.0.1 TCP:127.0.0.1:2627; done
-    let mut lines = Framed::new(stream, LinesCodec::new());
+    let mut lines: Framed<TcpStream, LinesCodec> = Framed::new(stream, LinesCodec::new());
     lines.send(HELLO_DICT_220).await?;
+    let def_rgxp = Regex::new(r"\w+?\s+(.+?)\s+(.+)").unwrap();
+
     loop {
         if let Some(external_input) = lines.next().await {
             match external_input {
@@ -100,9 +105,9 @@ async fn handle_client(mut stream: TcpStream, dicts: Dictionaries) -> Result<(),
                     match command_result {
                         Ok(command) => match command {
                             Command::DEFINE => {
-                                let word = pieces[2].unquote();
+                                let text = def_rgxp.replace_all(&line, "$2").to_string().replace("\n", "");
                                 let dict_name = pieces[1].unquote();
-                                let maybe_definitions = dicts.lookup_word(word.clone(), dict_name);
+                                let maybe_definitions = dicts.lookup_word(text.clone(), dict_name);
                                 match maybe_definitions {
                                     Err(e) => {
                                         #[cfg(debug_assertions)] eprintln!("Result is: '{:?}'", &e);
@@ -112,7 +117,14 @@ async fn handle_client(mut stream: TcpStream, dicts: Dictionaries) -> Result<(),
                                                 break;
                                             },
                                             WordSearchError::WordNotFoundErr => {
-                                                lines.send(NO_MATCH_552).await?;
+                                                let flbk_res = fallback::query_dictd_server("127.0.0.1:2627", "en_ru", &text, &mut lines).await;
+                                                match flbk_res {
+                                                    Ok(_) => println!("Got definition for \"{text}\" from fallback"),
+                                                    Err(e) => {
+                                                        println!("Error \"{e:?}\" getting definition for \"{text}\" from fallback");
+                                                        lines.send(NO_MATCH_552).await?;
+                                                    }
+                                                }
                                             },
                                         }
                                     }
@@ -121,7 +133,7 @@ async fn handle_client(mut stream: TcpStream, dicts: Dictionaries) -> Result<(),
                                         lines.send(format!("150 {} definitions retrieved\r", definitions.len())).await?;
                                         for (dictionary, definition) in definitions.iter() {
                                             #[cfg(debug_assertions)] eprintln!("Definition from {dictionary} is: '{definition}'");
-                                            lines.send(format!("151 \"{word}\" {dictionary}\r")).await?;
+                                            lines.send(format!("151 \"{text}\" {dictionary}\r")).await?;
                                             let definition = unix2dos(definition);
                                             lines.send(format!("{definition}\r")).await?;
                                             lines.send(ENDING_DOT).await?;
@@ -293,6 +305,7 @@ impl Dictionaries {
             Err(WordSearchError::WordNotFoundErr)
         }
     }
+
     fn lookup_word(&self, word: String, dict_name: String) -> Result<Vec<(String, String)>, WordSearchError> {
         #[cfg(debug_assertions)] eprintln!("Looking for '{}' in '{}'", &word, &dict_name);
         let dicts2lookup: Vec<String> = self.filter_dicts(dict_name);

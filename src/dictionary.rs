@@ -19,7 +19,7 @@ impl Dictionary {
         Self {
             short_name: name,
             name: long_name,
-            map: Mutex::new(ZstdMap::new(7, 512))
+            map: Mutex::new(ZstdMap::new(11, 512))
         }
     }
     pub(crate) fn get_word_meaning(&self, word: &str) -> Option<String> {
