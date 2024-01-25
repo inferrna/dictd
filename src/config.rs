@@ -2,13 +2,20 @@ use std::path::MAIN_SEPARATOR;
 use serde::Deserialize;
 
 
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct FallbackConfig {
+    db: String,
+    host: String,
+    port: u32,
+}
 #[derive(Debug, Deserialize)]
 pub(crate) struct DatabaseConfig {
     name: Option<String>,
     short_name: Option<String>,
     path: String,
+    fallback: Option<FallbackConfig>,
 }
-
 impl DatabaseConfig {
     pub fn name(&self) -> String {
         self.name.as_ref().cloned().unwrap_or_else(|| self.short_name()).clone()
@@ -26,6 +33,9 @@ impl DatabaseConfig {
     pub fn path(&self) -> &str {
         &self.path
     }
+    pub fn fallback(&self) -> Option<&FallbackConfig> {
+        self.fallback.as_ref()
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -33,6 +43,7 @@ pub(crate) struct ServerConfig {
     host: String,
     port: u32,
 }
+
 
 impl ServerConfig {
     fn host(&self) -> &str {
