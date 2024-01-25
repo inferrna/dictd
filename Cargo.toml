@@ -14,7 +14,7 @@ strum = "0.25"
 serde = { version = "^1", features = ["derive"] }
 toml = "0.8"
 strum_macros = "0.25"
-egzreader = "2
+egzreader = "2"
 zstd-map = {path = "../../BitsSex/zstd-map" }
 newline-converter = "^0.3"
 custom_error = "^1"
