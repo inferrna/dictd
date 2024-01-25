@@ -6,12 +6,12 @@ use std::sync::{Mutex};
 use egzreader::EgzReader;
 use memory_stats::memory_stats;
 use regex::Regex;
-use sqlite_zstd::rusqlite;
+use sqlite_zstd;
 
 pub struct Dictionary {
     short_name: String,
     name: String,
-    conn: Mutex<rusqlite::Connection>,
+    conn: Mutex<Connection>,
 }
 
 impl Dictionary {
