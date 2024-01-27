@@ -10,7 +10,7 @@ tokio = { version = "^1", features = ["rt-multi-thread", "net", "macros", "io-ut
 tokio-util = { version = "*", features=["codec"] }
 futures-util = "0.3"
 futures = { version = "^0.3" }
-regex = "1.10"
+regex = "1"
 rayon = "1.8"
 strum = "0.25"
 strum_macros = "0.25"
@@ -18,7 +18,9 @@ serde = "^1"
 custom_error = "1.9"
 toml = "^0.8"
 egzreader = "2"
-sqlite-zstd = {path = "../../OtherAlien/sqlite-zstd" }
+
+# Waiting https://github.com/phiresky/sqlite-zstd/issues/35
+sqlite-zstd = {git = "https://github.com/inferrna/sqlite-zstd" }
 newline-converter = "0.3"
 memory-stats = "1.1"
 

@@ -1,12 +1,15 @@
 use std::fmt::Debug;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
-use std::path::MAIN_SEPARATOR;
 use std::sync::{Mutex};
 use egzreader::EgzReader;
 use memory_stats::memory_stats;
 use regex::Regex;
-use sqlite_zstd;
+use crate::config::DatabaseConfig;
+use crate::MatchStrategy;
+use sqlite_zstd::rusqlite::Connection;
+use sqlite_zstd::rusqlite::types::FromSql;
+
 
 pub struct Dictionary {
     short_name: String,
@@ -218,25 +221,9 @@ impl DictLoader for Dictionary {
 }
 
 #[test]
-fn test_read_dict() {
-    let path = "/media/Data/Data/Dicts/stardict-eng_rus_full-2.4.2/eng_rus_full.dict".to_string();
-    Dictionary::from_dict_file(path);
-}
-#[test]
-fn test_read_dict_compressed() {
-    let path = "/media/Data/Data/Dicts/stardict-eng_rus_full-2.4.2/eng_rus_full.dict.gz".to_string();
-    Dictionary::from_dict_file(path);
-}
-
-#[test]
 fn test_read_compressed_egz() {
     let path = "/media/Data/Data/Dicts/stardict-rus_eng_full-2.4.2/rus_eng_full.dict.gz";
     let egzr = EgzReader::new(std::fs::File::open(path).unwrap());
     let mut dictionary = Dictionary::new_empty("rus_eng_full".to_string(), "".to_uppercase());
     dictionary.load_from_reader(BufReader::new(egzr));
 }
-
-use sqlite_zstd::rusqlite::{Connection, Rows, Statement};
-use sqlite_zstd::rusqlite::types::FromSql;
-use crate::config::DatabaseConfig;
-use crate::MatchStrategy;
